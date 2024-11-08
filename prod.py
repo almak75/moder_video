@@ -266,6 +266,7 @@ def push_batch(batch):
     rez = look_to_file(batch)
     return rez
 
+
 async def get_minimum_frame(list_of_frame, vidcap, rotateCode):
     #list_of_frame - список номеров кадров или итератор кадров, которые надо обработать
     #vidcap - Уже открытое видео для чтения кадров
@@ -273,22 +274,25 @@ async def get_minimum_frame(list_of_frame, vidcap, rotateCode):
     batch = []     #бач изображений. Складываем сюда кадры по их индексу, бач потом закинем целиков в нейронку
     batch_ind = [] #номера кадров соответствующих бачу
     rating = []  #список для хранения результатов по каждому кадру
-    for frame_number in list_of_frame:   
+   
+ 
+    for frame_number in list_of_frame:
         vidcap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)  #устанавливаем указатель на нужное место
-        _, image = vidcap.read()
+        R, image = vidcap.read()
+        if not R:  #может и не прочитаться. фильмы с переменной скоростью кадров - читаются не все кадры
+            continue
+        
         if rotateCode:                                #вращаем если надо
             image = cv2.rotate(image, rotateCode)
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  #приводим в нужную палитру.... получим numpy.ndarray
         img = Image.fromarray(image_rgb)                    #ВОЗВРАЩАЕМ В ИЗОБРАЖЕНИЕ
         
-        
 
         #проверим не является ли это одноцветной заливкой. такие кадры не нужны, мы их просто пропускаем. Они плохо детектятся и их система отправляет на модерацию
-        #img_array = np.array(img)
-        #print(3, type(img_array))
         is_solid_color = np.all(image_rgb == image_rgb[0,  0])  #для проверки нужен np, по этому используем ранее полученный image_rgb
         if is_solid_color:
             continue
+       
 
 
         #отправляем каждый кадр на проверку
@@ -297,7 +301,6 @@ async def get_minimum_frame(list_of_frame, vidcap, rotateCode):
 
         if len(batch)==BATCH_SIZE:
                 #накопили предельный размер бача - опустошаем, отправив на анализ
-                
                 rating.extend(zip(batch_ind, await push_batch(batch)))
                 batch.clear()
                 batch_ind.clear()
@@ -325,8 +328,10 @@ async def get_minimum_frame(list_of_frame, vidcap, rotateCode):
 async def look_to_video_file(temp_file):
   
     vidcap = cv2.VideoCapture(temp_file)
+    acceleration_status = vidcap.get(cv2.CAP_PROP_HW_ACCELERATION) #пытаемся ускорить хоть как то за счет аппаратного ускорения
     vidcap.set(cv2.CAP_PROP_ORIENTATION_AUTO,  1)   #в документации написано, что это может работать не всегда...но в нашем случае работало всегда.  Далее есть возможность повернуть вручную 
     frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
+    #print('Всего кадров в файле', frames)
     
     #rotateCode = check_rotation(temp_file) #процедура читает вручную надо ли повернуть видео....вдруг пригодится.
     rotateCode = None                       #
@@ -336,7 +341,7 @@ async def look_to_video_file(temp_file):
     first_list = range(0,frames, STEP_FRAME)  #выбираем кадры для первого прохода поиска кадра с минимальным рейтингом
     n,min_rating, worst_result =await get_minimum_frame(first_list,vidcap, rotateCode)  #отправляем список интересующихся номеров кадров, получаем номер кадра, значение 
     #print(1,n,min_rating,worst_result)
-    
+    #print('Второй проход')
     if STEP_FRAME != 1:  #если шаг = 1 то второй проход делать не надо. и так уже найден минимум
         second_list = range(max(0,n - STEP_FRAME//2-1),min(frames-1, n + STEP_FRAME//2+1), 1)
         n,min_rating,worst_result =await get_minimum_frame(second_list,vidcap, rotateCode)
